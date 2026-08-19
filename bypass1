@@ -1,0 +1,1457 @@
+--// issues (pretty sure 1 is that its meant to be closest to cursor whos in fov not closest to my character 2. the hitbox needs to completly ignore dead K.O people they get in the way when trying to kill someoe when they are around 3. the passthrough needs to be fixed so passthrough happens so the hitbox does not look like its stopping my bullets on my client screen hitbox expansion is too small for distance/ also ban hitbox expansion unless at the 78 distance and optimize for preformace
+
+
+
+if getgenv().DNSload then
+    if getgenv().DNS_Cleanup then getgenv().DNS_Cleanup() end
+end
+
+local DNS_Connections = {}
+local DNS_Drawings = {}
+
+local function DNS_Cleanup()
+    for _, conn in ipairs(DNS_Connections) do pcall(function() conn:Disconnect() end) end
+    for _, draw in ipairs(DNS_Drawings) do pcall(function() draw:Remove() end) end
+    if getgenv().DNS_OldRandom then
+        hookfunction(math.random, getgenv().DNS_OldRandom)
+        getgenv().DNS_OldRandom = nil
+    end
+    getgenv().DNSload = nil
+    getgenv().DNS_Cleanup = nil
+end
+
+getgenv().DNS_Cleanup = DNS_Cleanup
+getgenv().DNSload = true
+
+getgenv().DNS = {
+    ["Silent"] = {
+        ["Enabled"] = true,
+        ["Main"] = {
+            ["Enabled"] = true,
+            ["Hitchance"] = 100,
+            ["Parts"] = {
+                "Head","UpperTorso","LowerTorso",
+                "LeftUpperArm","LeftLowerArm","LeftHand",
+                "RightUpperArm","RightLowerArm","RightHand",
+                "LeftUpperLeg","LeftLowerLeg",
+                "RightUpperLeg","RightLowerLeg",
+            },
+            ["ClosestPart"] = {
+                ["Enabled"] = true,
+                ["Mode"] = "Cursor",
+            },
+            ["ClosestPoint"] = {
+                ["Enabled"] = true,
+                ["Mode"] = "Advanced",
+                ["Scale"] = 1.5,
+                ["Density"] = 1,
+            },
+            ["AutoLock"] = {
+                ["Enabled"] = true,
+                ["Mode"] = "FOV",
+                ["FOVOnly"] = true,
+            },
+            ["Optimizations"] = {
+                ["FrameThrottle"] = 1,
+                ["WallCheckThrottle"] = 1,
+            },
+        },
+        ["ClientBullet"] = {
+            ["Enabled"] = true,
+            ["Mode"] = "LegitSniper", 
+        },
+        ["FOV"] = {
+            ["Enabled"] = true,
+            ["ShowFOV"] = false,
+            ["Radius"] = 650,
+            ["Color"] = Color3.fromRGB(255,68,80),
+            ["FocusColor"] = Color3.fromRGB(255,255,255),
+            ["Filled"] = false,
+            ["Transparency"] = 1,
+            ["Thickness"] = 1,
+        },
+        ["WallCheck"] = true,
+        ["WeaponCheck"] = true,
+        ["AntiAimViewer"] = false,
+    },
+    ["SpreadMod"] = {
+        ["Enabled"] = false,
+        ["BulletSpread"] = {
+            ["Enabled"] = true,
+            ["Amount"] = 52,
+        },
+    },
+    ["ESP"] = {
+        ["Enabled"] = true,
+        ["ToggleKey"] = Enum.KeyCode.V,
+        ["ShowNames"] = true,
+        ["ShowBoxes"] = false,
+        ["Color"] = Color3.fromRGB(255, 255, 255),
+        ["Transparency"] = 0.7,
+        ["RenderDistance"] = 10000,
+    },
+    ["Misc"] = {
+        ["HoldShoot"] = {
+            ["Enabled"] = true,
+        },
+        ["NoJumpCooldown"] = {
+            ["Enabled"] = true,
+        },
+        ["NoSlowdown"] = {
+            ["Enabled"] = true,
+        },
+        ["TryhardAnimations"] = {
+            ["Enabled"] = true,
+            ["RunAnimation"] = "http://www.roblox.com/asset/?id=616163682",
+            ["JumpAnimation"] = "http://www.roblox.com/asset/?id=656117878",
+            ["FallAnimation"] = "http://www.roblox.com/asset/?id=707829716",
+        },
+        ["MacroMode"] = {
+            ["Enabled"] = true,
+            ["Key"] = Enum.KeyCode.X,
+        },
+        ["InstantKill"] = {
+            ["Enabled"] = true,
+            ["Range"] = 78,
+            ["PutAwayAfterShot"] = true,
+        },
+    },
+    ["ExtendedHitbox"] = {
+        ["Enabled"] = true,
+        ["HitboxSize"] = Vector3.new(80, 10, 80),  -- Bigger for 78 stud range
+        ["VisualBoxSize"] = Vector3.new(2, 2, 2),
+        ["TargetPart"] = "HumanoidRootPart",
+        ["Range"] = 78,  -- Max range in studs
+        ["CloseDisableEnabled"] = false,  -- Disable hitbox if closer than CloseDisableRange
+        ["CloseDisableRange"] = 30,  -- Distance to disable hitbox at (if CloseDisableEnabled is true)
+        ["ShowHitbox"] = false,  -- Set to false to hide hitbox
+        ["Distance"] = 15,
+    },
+    ["FixVisuals"] = {
+        ["Enabled"] = true,  -- Remove blood splatter and damage indicators
+    },
+}
+local function cfg_silent() return getgenv().DNS["Silent"]["Main"] end
+local function cfg_sfov() return getgenv().DNS["Silent"]["FOV"] end
+local function cfg_spread() return getgenv().DNS["SpreadMod"]["BulletSpread"] end
+local function cfg_misc() return getgenv().DNS["Misc"] end
+local function cfg_esp() return getgenv().DNS["ESP"] end
+
+local plrs = game:GetService("Players")
+local rs = game:GetService("RunService")
+local uis = game:GetService("UserInputService")
+local c = workspace.CurrentCamera
+local lplr = plrs.LocalPlayer
+local PhysicsService = game:GetService("PhysicsService")
+
+-- Extended Hitbox Setup
+pcall(function() PhysicsService:CreateCollisionGroup("Hitboxes") end)
+pcall(function() PhysicsService:CreateCollisionGroup("PlayerGroup") end)
+pcall(function() PhysicsService:CreateCollisionGroup("Noclip") end)
+
+if lplr.Character then
+    local humanoidRootPart = lplr.Character:FindFirstChild("HumanoidRootPart")
+    if humanoidRootPart then
+        pcall(function() PhysicsService:AddCollisionGroup("PlayerGroup", humanoidRootPart) end)
+    end
+end
+
+table.insert(DNS_Connections, lplr.CharacterAdded:Connect(function(char)
+    task.wait(0.1)
+    local humanoidRootPart = char:FindFirstChild("HumanoidRootPart")
+    if humanoidRootPart then
+        pcall(function() PhysicsService:AddCollisionGroup("PlayerGroup", humanoidRootPart) end)
+    end
+end))
+
+pcall(function() PhysicsService:CollisionGroupSetCollidable("Hitboxes", "PlayerGroup", false) end)
+pcall(function() PhysicsService:CollisionGroupSetCollidable("Noclip", "Noclip", false) end)
+pcall(function() PhysicsService:CollisionGroupSetCollidable("Noclip", "Default", false) end)
+
+-- Extended Hitbox Setup - No Collision
+pcall(function() PhysicsService:CreateCollisionGroup("Hitboxes") end)
+pcall(function() PhysicsService:CreateCollisionGroup("PlayerGroup") end)
+
+if lplr.Character then
+    local humanoidRootPart = lplr.Character:FindFirstChild("HumanoidRootPart")
+    if humanoidRootPart then
+        pcall(function() PhysicsService:AddCollisionGroup("PlayerGroup", humanoidRootPart) end)
+    end
+end
+
+table.insert(DNS_Connections, lplr.CharacterAdded:Connect(function(char)
+    task.wait(0.1)
+    local humanoidRootPart = char:FindFirstChild("HumanoidRootPart")
+    if humanoidRootPart then
+        pcall(function() PhysicsService:AddCollisionGroup("PlayerGroup", humanoidRootPart) end)
+    end
+end))
+
+-- EXTEND BEAMS - Only to active target
+local beamDefaults = {}
+local closestPlayerRef = nil  -- Reference to current target
+
+local function extendBeams()
+    table.insert(DNS_Connections, workspace.Ignored.Siren.Radius.ChildAdded:Connect(function(part)
+        if part.Name == "BULLET_RAYS" then
+            task.spawn(function()
+                task.wait(0.001)
+                local beam = part:FindFirstChild("NewGunBeam")
+                if beam and beam:IsA("Beam") and beam.Attachment0 and beam.Attachment1 then
+                    -- Only modify if we have an active target with expanded hitbox
+                    if closestPlayerRef and closestPlayerRef.Character then
+                        local targetHRP = closestPlayerRef.Character:FindFirstChild("HumanoidRootPart")
+                        if targetHRP and targetHRP.Size == getgenv().DNS["ExtendedHitbox"]["HitboxSize"] then
+                            beam.Width0 = 0.03
+                            beam.Width1 = 0.1
+                            
+                            local att0 = beam.Attachment0
+                            local att1 = beam.Attachment1
+                            
+                            local beamKey = tostring(part)
+                            if not beamDefaults[beamKey] then
+                                beamDefaults[beamKey] = att1.Position
+                            end
+                            
+                            local startPos = att0.WorldPosition
+                            local distToTarget = (targetHRP.Position - startPos).Magnitude
+                            
+                            if distToTarget <= 78 then
+                                att1.Position = Vector3.new(0, 0, -distToTarget)
+                            else
+                                att1.Position = beamDefaults[beamKey]
+                            end
+                        end
+                    end
+                    -- Don't touch beam if no active target - leave it completely alone
+                end
+            end)
+        end
+    end))
+end
+
+extendBeams()
+
+-- FIX VISUALS - Remove blood splatter and damage indicators
+local function fixVisuals()
+    if not getgenv().DNS["FixVisuals"]["Enabled"] then return end
+    
+    -- Remove blood screen and damage indicator every frame
+    table.insert(DNS_Connections, rs.Heartbeat:Connect(function()
+        pcall(function()
+            local playerGui = lplr:FindFirstChild("PlayerGui")
+            if playerGui then
+                local mainGui = playerGui:FindFirstChild("MainScreenGui")
+                if mainGui then
+                    -- Remove blood screen
+                    local bloodScreen = mainGui:FindFirstChild("BloodScreen2")
+                    if bloodScreen then pcall(function() bloodScreen:Destroy() end) end
+                    
+                    -- Remove damage indicator
+                    local dmgIndicator = mainGui:FindFirstChild("DamageIndicator")
+                    if dmgIndicator then pcall(function() dmgIndicator:Destroy() end) end
+                end
+            end
+        end)
+    end))
+    
+    -- Remove blood particles from all players
+    table.insert(DNS_Connections, rs.Heartbeat:Connect(function()
+        pcall(function()
+            for _, player in ipairs(game:GetService("Players"):GetPlayers()) do
+                if player.Character then
+                    local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        -- Remove blood particle
+                        local bloodParticle = hrp:FindFirstChild("BloodParticle")
+                        if bloodParticle then pcall(function() bloodParticle:Destroy() end) end
+                    end
+                end
+            end
+        end)
+    end))
+    
+    -- Hook into MainScreenGui to catch BloodScreen2 as it's created
+    table.insert(DNS_Connections, rs.Heartbeat:Connect(function()
+        pcall(function()
+            local playerGui = lplr:FindFirstChild("PlayerGui")
+            if playerGui then
+                local mainGui = playerGui:FindFirstChild("MainScreenGui")
+                if mainGui and not mainGui:FindFirstChild("_BloodHooked") then
+                    -- Add marker so we don't rehook
+                    local marker = Instance.new("BoolValue")
+                    marker.Name = "_BloodHooked"
+                    marker.Parent = mainGui
+                    
+                    -- Hook child added
+                    table.insert(DNS_Connections, mainGui.ChildAdded:Connect(function(child)
+                        if child.Name == "BloodScreen2" or child.Name == "DamageIndicator" then
+                            task.wait(0.001)
+                            pcall(function() child:Destroy() end)
+                        end
+                    end))
+                end
+            end
+        end)
+    end))
+end
+
+fixVisuals()
+
+local CachedAimPart = nil
+local SilentTarget = nil
+local gun_handler = nil
+local gun_handler_active = false
+local FrameThrottleCounter = 0
+local macro_mode = false 
+local ik_active = false
+local holdshoot_active = false
+
+if cfg_misc()["MacroMode"]["Enabled"] then
+    local macro_key = cfg_misc()["MacroMode"]["Key"]
+    
+    uis.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == macro_key then
+            macro_mode = true
+        end
+    end)
+    
+    uis.InputEnded:Connect(function(input, gameProcessed)
+        if input.KeyCode == macro_key then
+            macro_mode = false
+        end
+    end)
+end
+
+
+local function IsAlive(player)
+    if not player or not player.Character then return false end
+    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    if hum:GetState() == Enum.HumanoidStateType.Dead then return false end
+    
+    local be = player.Character:FindFirstChild("BodyEffects")
+    if be then
+        if be:FindFirstChild("K.O") and be["K.O"].Value == true then return false end
+        if be:FindFirstChild("Dead") and be["Dead"].Value == true then return false end
+    end
+    return true
+end
+
+local function IsRevolverEquipped()
+    if not lplr or not lplr.Character then return false end
+    local tool = lplr.Character:FindFirstChildOfClass("Tool")
+    if tool and (tool.Name == "[Revolver]" or tool.Name:lower():find("revolver")) then
+        return true
+    end
+    return false
+end
+
+-- Extended Hitbox Functions
+local function disableHitboxExpansion(player)
+    if not player or not player.Character then return end
+    local targetPart = player.Character:FindFirstChild(getgenv().DNS["ExtendedHitbox"]["TargetPart"])
+    if targetPart then
+        targetPart.Size = Vector3.new(2, 2, 2)
+        targetPart.Transparency = 1  -- Reset transparency to hide grey box
+        trackedHitboxes[player] = nil  -- Remove from tracked
+        pcall(function()
+            PhysicsService:RemoveCollisionGroup("Noclip")
+            PhysicsService:CreateCollisionGroup("Noclip")
+            PhysicsService:CollisionGroupSetCollidable("Noclip", "Noclip", false)
+        end)
+    end
+end
+
+local function expandHitbox(player)
+    if not player or not player.Character then return end
+    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+    
+    local be = player.Character:FindFirstChild("BodyEffects")
+    if be then
+        if be:FindFirstChild("K.O") and be["K.O"].Value == true then return end
+        if be:FindFirstChild("Dead") and be["Dead"].Value == true then return end
+    end
+    
+    local targetPart = player.Character:FindFirstChild(getgenv().DNS["ExtendedHitbox"]["TargetPart"])
+    if targetPart and targetPart:IsA("BasePart") then
+        pcall(function() PhysicsService:AddCollisionGroup("Hitboxes", targetPart) end)
+        targetPart.Size = getgenv().DNS["ExtendedHitbox"]["HitboxSize"]
+        targetPart.Transparency = 1
+        targetPart.CanCollide = false
+    end
+end
+
+local function monitorPlayerStatus(player)
+    if player == lplr then return end
+    
+    table.insert(DNS_Connections, player.CharacterAdded:Connect(function()
+        task.wait(0.1)
+        expandHitbox(player)
+    end))
+    
+    local function watchStatus()
+        if not player.Character then return end
+        local bodyEffects = player.Character:FindFirstChild("BodyEffects")
+        if bodyEffects then
+            local koValue = bodyEffects:FindFirstChild("K.O")
+            local deadValue = bodyEffects:FindFirstChild("Dead")
+            
+            if koValue then
+                table.insert(DNS_Connections, koValue.Changed:Connect(function()
+                    if koValue.Value == true then
+                        disableHitboxExpansion(player)
+                    else
+                        expandHitbox(player)
+                    end
+                end))
+            end
+            
+            if deadValue then
+                table.insert(DNS_Connections, deadValue.Changed:Connect(function()
+                    if deadValue.Value == true then
+                        disableHitboxExpansion(player)
+                    end
+                end))
+            end
+        end
+    end
+    
+    watchStatus()
+end
+
+-- Monitor existing players
+for _, player in pairs(plrs:GetPlayers()) do
+    monitorPlayerStatus(player)
+end
+
+-- Monitor new players
+table.insert(DNS_Connections, plrs.PlayerAdded:Connect(function(player)
+    monitorPlayerStatus(player)
+end))
+
+local function GetPlayers()
+    local players = {}
+    for _, player in pairs(plrs:GetPlayers()) do
+        if player ~= lplr and IsAlive(player) then
+            table.insert(players, player)
+        end
+    end
+    return players
+end
+
+local function WorldToScreen(position)
+    local screenPos, onScreen = c:WorldToViewportPoint(position)
+    return Vector2.new(screenPos.X, screenPos.Y), onScreen and screenPos.Z > 0
+end
+
+local function GetClosestPlayerInFOV()
+    local fov = getgenv().DNS["Silent"]["FOV"]["Radius"]
+    local closestPlayer = nil
+    local closestDist = fov
+    local mousePos = uis:GetMouseLocation()
+    local player_hrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
+    
+    if not player_hrp then return nil end
+    
+    local player_pos = player_hrp.Position
+    local max_range = 400 
+    
+    for _, player in pairs(GetPlayers()) do
+        if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then continue end
+        
+        if not IsAlive(player) then continue end
+        
+        local target_pos = player.Character.HumanoidRootPart.Position
+        local world_dist = (target_pos - player_pos).Magnitude
+        if world_dist > max_range then continue end
+        
+        local screenPos, onScreen = WorldToScreen(target_pos)
+        if not onScreen then continue end
+        
+        local dist = (screenPos - mousePos).Magnitude
+        if dist < closestDist then
+            closestDist = dist
+            closestPlayer = player
+        end
+    end
+    
+    return closestPlayer
+end
+
+local function DoWallCheck(player)
+    if not getgenv().DNS["Silent"]["WallCheck"] then return true end
+    if not player.Character then return false end
+    
+    local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    -- Exclude your character and all dead/K.O players from raycast
+    local excludeList = {lplr.Character}
+    for _, p in pairs(game:GetService("Players"):GetPlayers()) do
+        if p ~= lplr and p.Character and not IsAlive(p) then
+            table.insert(excludeList, p.Character)
+        end
+    end
+    
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = excludeList
+    
+    local origin = c.CFrame.Position
+    local direction = (hrp.Position - origin)
+    local result = workspace:Raycast(origin, direction, rayParams)
+    
+    if not result then return true end
+    
+    return result.Instance:IsDescendantOf(player.Character)
+end
+
+local function GetSilentAimPart(player)
+    if not player.Character then return nil end
+    
+    local mousePos = uis:GetMouseLocation()
+    
+    if getgenv().DNS["Silent"]["Main"]["ClosestPoint"]["Enabled"] then
+        local parts = getgenv().DNS["Silent"]["Main"]["Parts"]
+        local closest_part = nil
+        local closest_dist = math.huge
+        
+        for _, part_name in ipairs(parts) do
+            local part = player.Character:FindFirstChild(part_name)
+            if part and part:IsA("BasePart") then
+                local screenPos = c:WorldToViewportPoint(part.Position)
+                if screenPos.Z > 0 then
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                    if dist < closest_dist then
+                        closest_dist = dist
+                        closest_part = part
+                    end
+                end
+            end
+        end
+        return closest_part
+    end
+    
+    if getgenv().DNS["Silent"]["Main"]["ClosestPart"]["Enabled"] then
+        local parts = getgenv().DNS["Silent"]["Main"]["Parts"]
+        local closest_part = nil
+        local closest_dist = math.huge
+        
+        for _, part_name in ipairs(parts) do
+            local part = player.Character:FindFirstChild(part_name)
+            if part and part:IsA("BasePart") then
+                local screenPos = c:WorldToViewportPoint(part.Position)
+                if screenPos.Z > 0 then
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                    if dist < closest_dist then
+                        closest_dist = dist
+                        closest_part = part
+                    end
+                end
+            end
+        end
+        return closest_part
+    end
+    
+    local parts = getgenv().DNS["Silent"]["Main"]["Parts"]
+    local closest_part = nil
+    local closest_dist = math.huge
+    
+    for _, part_name in ipairs(parts) do
+        local part = player.Character:FindFirstChild(part_name)
+        if part and part:IsA("BasePart") then
+            local screenPos = c:WorldToViewportPoint(part.Position)
+            if screenPos.Z > 0 then
+                local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                if dist < closest_dist then
+                    closest_dist = dist
+                    closest_part = part
+                end
+            end
+        end
+    end
+    
+    return closest_part
+end
+
+local fov_throttle = 0
+
+local function UpdateCachedAim()
+    CachedAimPart = nil
+    CachedAimPosition = nil
+    
+    if macro_mode and not ik_active then return end
+    
+    if not getgenv().DNS["Silent"]["Enabled"] then return end
+    if not getgenv().DNS["Silent"]["Main"]["Enabled"] then return end
+    
+    fov_throttle = (fov_throttle + 1) % 2
+    
+    if fov_throttle == 0 then
+        SilentTarget = GetClosestPlayerInFOV()
+    end
+    
+    if not SilentTarget then return end
+    if not SilentTarget.Character then return end
+    
+    if not IsAlive(SilentTarget) then return end
+    
+    if not macro_mode then
+        if not DoWallCheck(SilentTarget) then return end
+    end
+    
+    CachedAimPart = GetSilentAimPart(SilentTarget)
+    if CachedAimPart then
+        CachedAimPosition = CachedAimPart.Position
+    end
+end
+
+do
+    local ok, gh = pcall(function()
+        return require(game:GetService("ReplicatedStorage"):WaitForChild("Modules",5):WaitForChild("GunHandler",5))
+    end)
+    if ok and gh and gh.shoot then
+        gun_handler = gh
+        gun_handler_active = true
+    else
+    end
+end
+
+
+if getgenv().DNS["SpreadMod"]["Enabled"] then
+    local math_random_old
+    math_random_old = hookfunction(math.random, newcclosure(function(...)
+        if checkcaller() then return math_random_old(...) end
+        local spread = cfg_spread()
+        if spread and spread["Enabled"] then
+            local args = {...}
+            local a1, a2 = args[1], args[2]
+            if (#args == 0) or (a1 == -0.05 and a2 == 0.05) or (a1 == -0.1) or (a1 == -0.05) then
+                return math_random_old(...) * (spread["Amount"] / 100)
+            end
+        end
+        return math_random_old(...)
+    end))
+    getgenv().DNS_OldRandom = math_random_old
+end
+
+
+if gun_handler_active then
+    local orig_shoot = gun_handler.shoot
+    local ClientBulletHooked = false
+    
+    
+    table.insert(DNS_Connections, game:GetService("RunService").Heartbeat:Connect(function()
+        local cb_enabled = getgenv().DNS["Silent"]["ClientBullet"]["Enabled"]
+        local cb_mode = getgenv().DNS["Silent"]["ClientBullet"]["Mode"]
+        
+        
+        if macro_mode then
+            cb_enabled = false
+        end
+        
+        
+        if cb_enabled and not ClientBulletHooked then
+            gun_handler.shoot = function(args)
+                UpdateCachedAim()
+                
+                local results = {orig_shoot(args)}
+                
+                -- Check if revolver is equipped
+                local isRevolver = IsRevolverEquipped()
+                
+                -- Calculate distance to target
+                local distance = 0
+                if SilentTarget and SilentTarget.Character then
+                    local lhrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
+                    local thrp = SilentTarget.Character:FindFirstChild("HumanoidRootPart")
+                    if lhrp and thrp then
+                        distance = (thrp.Position - lhrp.Position).Magnitude
+                    end
+                end
+                
+                if CachedAimPart then
+                    -- REVOLVER: Full ClientBullet redirect with 263 stud limit
+                    if isRevolver and CachedAimPosition and distance <= 263 then
+                        local muz = args.ForcedOrigin
+                            or (args.Handle and args.Handle:FindFirstChild("Muzzle") and args.Handle.Muzzle.WorldPosition)
+                            or c.CFrame.Position
+                        
+                        results[1] = CachedAimPosition
+                        results[2] = CachedAimPart
+                        results[3] = (muz - CachedAimPosition).Unit
+                    elseif not isRevolver and distance <= 9999999 then
+                        -- OTHER GUNS: Only redirect results[2] (invisible head hit) within 78 studs
+                        results[2] = CachedAimPart  -- Force hit guaranteed
+                    end
+                end
+                
+                return table.unpack(results)
+            end
+            
+            ClientBulletHooked = true
+        elseif not cb_enabled and ClientBulletHooked then
+            gun_handler.shoot = orig_shoot
+            ClientBulletHooked = false
+        end
+    end))
+    
+    getgenv().DNS_GunHandler = gun_handler
+    getgenv().DNS_GunHandlerOriginal = orig_shoot
+ 
+    if gun_handler.getAim then
+        local orig_get_aim = gun_handler.getAim
+        gun_handler.getAim = function(p0, p1)
+            local sc = getgenv().DNS["Silent"]
+            if not sc["Enabled"] or not sc["Main"]["Enabled"] then return orig_get_aim(p0,p1) end
+            
+            if not CachedAimPosition then return orig_get_aim(p0,p1) end
+            
+            -- Revolver: return normal aim (for full ClientBullet)
+            if IsRevolverEquipped() then return orig_get_aim(p0,p1) end
+            
+            -- Other guns: redirect aim (invisible head hit method)
+            local dir = CachedAimPosition - p0
+            return dir.Unit, dir.Magnitude
+        end
+    end
+end
+
+if cfg_misc()["HoldShoot"]["Enabled"] then
+    table.insert(DNS_Connections, uis.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            holdshoot_active = true
+        end
+    end))
+    
+    table.insert(DNS_Connections, uis.InputEnded:Connect(function(input, gameProcessed)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            holdshoot_active = false
+        end
+    end))
+    
+    table.insert(DNS_Connections, rs.RenderStepped:Connect(function()
+        if not holdshoot_active then return end
+        if not lplr or not lplr.Character then return end
+        local tool = lplr.Character:FindFirstChildOfClass("Tool")
+        if tool then
+            pcall(function() tool:Activate() end)
+        end
+    end))
+end
+
+if cfg_misc()["NoJumpCooldown"]["Enabled"] then
+    local function apply_no_jump_cooldown()
+        if lplr.Character then
+            local humanoid = lplr.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid.UseJumpPower = false
+            end
+        end
+    end
+    
+    apply_no_jump_cooldown()
+    
+    table.insert(DNS_Connections, lplr.CharacterAdded:Connect(function(character)
+        task.wait(0.1)
+        apply_no_jump_cooldown()
+    end))
+    
+    table.insert(DNS_Connections, rs.Heartbeat:Connect(function()
+        if lplr.Character then
+            local humanoid = lplr.Character:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.UseJumpPower then
+                humanoid.UseJumpPower = false
+            end
+        end
+    end))
+end
+
+if cfg_misc()["NoSlowdown"]["Enabled"] then
+    local function IsAliveLocal()
+        if lplr.Character then
+            local humanoid = lplr.Character:FindFirstChildOfClass("Humanoid")
+            return humanoid and humanoid.Health > 0
+        end
+        return false
+    end
+    
+    table.insert(DNS_Connections, rs.Stepped:Connect(function()
+        if not IsAliveLocal() then return end
+        
+        if lplr.Character then
+            local bodyEffects = lplr.Character:FindFirstChild("BodyEffects")
+            if bodyEffects then
+                local movement = bodyEffects:FindFirstChild("Movement")
+                if movement then
+                    local slowdownEffects = {"NoWalkSpeed", "NoJumping", "ReduceWalk"}
+                    for _, effectName in ipairs(slowdownEffects) do
+                        local effect = movement:FindFirstChild(effectName)
+                        if effect then
+                            pcall(function() effect:Destroy() end)
+                        end
+                    end
+                end
+                
+                local reload = bodyEffects:FindFirstChild("Reload")
+                if reload and reload:IsA("BoolValue") then
+                    if reload.Value == true then
+                        pcall(function() reload.Value = false end)
+                    end
+                end
+            end
+        end
+    end))
+end
+
+if cfg_misc()["TryhardAnimations"]["Enabled"] then
+    local anim_cfg = cfg_misc()["TryhardAnimations"]
+    table.insert(DNS_Connections, rs.Stepped:Connect(function()
+        if lplr.Character and lplr.Character:FindFirstChild("Animate") then
+            local animate = lplr.Character.Animate
+            if animate:FindFirstChild("run") and animate.run:FindFirstChild("RunAnim") then
+                animate.run.RunAnim.AnimationId = anim_cfg["RunAnimation"]
+            end
+            if animate:FindFirstChild("jump") and animate.jump:FindFirstChild("JumpAnim") then
+                animate.jump.JumpAnim.AnimationId = anim_cfg["JumpAnimation"]
+            end
+            if animate:FindFirstChild("fall") and animate.fall:FindFirstChild("FallAnim") then
+                animate.fall.FallAnim.AnimationId = anim_cfg["FallAnimation"]
+            end
+        end
+    end))
+end
+
+if getgenv().DNS["Silent"]["FOV"]["ShowFOV"] then
+    local fov_circle = Drawing.new("Circle")
+    fov_circle.Radius = cfg_sfov()["Radius"]
+    fov_circle.Color = cfg_sfov()["Color"]
+    fov_circle.Filled = cfg_sfov()["Filled"]
+    fov_circle.Transparency = cfg_sfov()["Transparency"]
+    fov_circle.Thickness = cfg_sfov()["Thickness"]
+    table.insert(DNS_Drawings, fov_circle)
+    
+    table.insert(DNS_Connections, rs.RenderStepped:Connect(function()
+        local mousePos = uis:GetMouseLocation()
+        fov_circle.Position = mousePos
+        fov_circle.Visible = not macro_mode 
+    end))
+end
+
+table.insert(DNS_Connections, rs.RenderStepped:Connect(function()
+    UpdateCachedAim()
+end))
+
+
+if cfg_esp()["Enabled"] then
+    if not _G.ESPFilteredPlayers then _G.ESPFilteredPlayers = {} end
+    
+    local ESP_Players = {}
+    local ESP_ShowGUI = false
+    local ESP_GUI = nil
+    local ESP_GUIVisible = false
+    
+    local function CreatePlayerESP(player)
+        if not player or player == lplr then return end
+        
+        if ESP_Players[player] then return end
+        
+        ESP_Players[player] = {
+            Box = Drawing.new("Square", {Visible = false, Filled = false, ZIndex = 999, Thickness = 1, Transparency = 1}),
+            BoxOutline = Drawing.new("Square", {Visible = false, Filled = false, ZIndex = 1, Color = Color3.fromRGB(0,0,0), Thickness = 2, Transparency = 1}),
+            Name = Drawing.new("Text", {Visible = false, Size = 13, Center = true, Outline = true, Font = Drawing.Fonts.Plex, Color = Color3.fromRGB(255,255,255), Transparency = 1}),
+        }
+        
+        table.insert(DNS_Drawings, ESP_Players[player].Box)
+        table.insert(DNS_Drawings, ESP_Players[player].BoxOutline)
+        table.insert(DNS_Drawings, ESP_Players[player].Name)
+    end
+    
+    local function CreateFilterGUI()
+        if ESP_GUI then pcall(function() ESP_GUI:Destroy() end) end
+        
+        local screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "ESP_FilterGUI"
+        screenGui.ResetOnSpawn = false
+        screenGui.Parent = game:GetService("CoreGui")
+        
+        local mainFrame = Instance.new("Frame")
+        mainFrame.Name = "MainFrame"
+        mainFrame.Size = UDim2.new(0, 200, 0, 400)
+        mainFrame.Position = UDim2.new(0, 10, 0, 50)
+        mainFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        mainFrame.BorderColor3 = Color3.fromRGB(100, 100, 100)
+        mainFrame.BorderSizePixel = 1
+        mainFrame.Parent = screenGui
+        
+        local serverButton = Instance.new("TextButton")
+        serverButton.Name = "ServerButton"
+        serverButton.Size = UDim2.new(1, -2, 0, 30)
+        serverButton.Position = UDim2.new(0, 1, 0, 1)
+        serverButton.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+        serverButton.BorderColor3 = Color3.fromRGB(120, 120, 120)
+        serverButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        serverButton.TextSize = 12
+        serverButton.Font = Enum.Font.GothamBold
+        serverButton.Text = "ESP Everyone"
+        serverButton.Parent = mainFrame
+        
+        serverButton.MouseButton1Click:Connect(function()
+            for _, player in pairs(plrs:GetPlayers()) do
+                if player ~= lplr and player.Character then
+                    local found = false
+                    for _, name in pairs(_G.ESPFilteredPlayers) do
+                        if name == player.Name then
+                            found = true
+                            break
+                        end
+                    end
+                    if not found then
+                        table.insert(_G.ESPFilteredPlayers, player.Name)
+                    end
+                end
+            end
+        end)
+        
+        local resetButton = Instance.new("TextButton")
+        resetButton.Name = "ResetButton"
+        resetButton.Size = UDim2.new(1, -2, 0, 25)
+        resetButton.Position = UDim2.new(0, 1, 0, 33)
+        resetButton.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+        resetButton.BorderColor3 = Color3.fromRGB(100, 100, 100)
+        resetButton.TextColor3 = Color3.fromRGB(200, 200, 200)
+        resetButton.TextSize = 11
+        resetButton.Font = Enum.Font.Gotham
+        resetButton.Text = "Clear All"
+        resetButton.Parent = mainFrame
+        
+        resetButton.MouseButton1Click:Connect(function()
+            _G.ESPFilteredPlayers = {}
+        end)
+        
+        local scrollFrame = Instance.new("ScrollingFrame")
+        scrollFrame.Name = "ScrollFrame"
+        scrollFrame.Size = UDim2.new(1, -2, 1, -62)
+        scrollFrame.Position = UDim2.new(0, 1, 0, 60)
+        scrollFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        scrollFrame.BorderColor3 = Color3.fromRGB(80, 80, 80)
+        scrollFrame.BorderSizePixel = 1
+        scrollFrame.ScrollBarThickness = 6
+        scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100)
+        scrollFrame.CanvasSize = UDim2.new(1, 0, 0, 0)
+        scrollFrame.Parent = mainFrame
+        
+        local function RefreshPlayerList()
+            scrollFrame:ClearAllChildren()
+            local yPosition = 0
+            
+            for _, player in pairs(plrs:GetPlayers()) do
+                if player ~= lplr and player.Character then
+                    local playerName = player.DisplayName
+                    local playerUsername = player.Name
+                    
+                    local isESPd = false
+                    for _, name in pairs(_G.ESPFilteredPlayers) do
+                        if name == playerUsername then
+                            isESPd = true
+                            break
+                        end
+                    end
+                    
+                    local playerBtn = Instance.new("TextButton")
+                    playerBtn.Name = playerUsername
+                    playerBtn.Size = UDim2.new(1, 0, 0, 25)
+                    playerBtn.Position = UDim2.new(0, 0, 0, yPosition)
+                    playerBtn.BackgroundColor3 = isESPd and Color3.fromRGB(100, 100, 100) or Color3.fromRGB(60, 60, 60)
+                    playerBtn.BorderSizePixel = 0
+                    playerBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    playerBtn.TextSize = 11
+                    playerBtn.Font = Enum.Font.Gotham
+                    playerBtn.Text = isESPd and ("✓ " .. playerName) or ("  " .. playerName)
+                    playerBtn.Parent = scrollFrame
+                    
+                    local function ToggleESP()
+                        local found = false
+                        local foundIndex = 0
+                        
+                        for i, name in ipairs(_G.ESPFilteredPlayers) do
+                            if name == playerUsername then
+                                found = true
+                                foundIndex = i
+                                break
+                            end
+                        end
+                        
+                        if found then
+                            table.remove(_G.ESPFilteredPlayers, foundIndex)
+                        else
+                            table.insert(_G.ESPFilteredPlayers, playerUsername)
+                        end
+                        
+                        updateCounter = 999
+                    end
+                    
+                    playerBtn.MouseButton1Click:Connect(ToggleESP)
+                    
+                    yPosition = yPosition + 25
+                end
+            end
+            
+            scrollFrame.CanvasSize = UDim2.new(1, 0, 0, math.max(yPosition, 1))
+        end
+        
+        RefreshPlayerList()
+        
+        local updateCounter = 0
+        table.insert(DNS_Connections, rs.Heartbeat:Connect(function()
+            if ESP_GUIVisible and scrollFrame and scrollFrame.Parent then
+                updateCounter = updateCounter + 1
+                if updateCounter >= 120 then
+                    updateCounter = 0
+                    pcall(function()
+                        RefreshPlayerList()
+                    end)
+                end
+            end
+        end))
+        
+        return screenGui
+    end
+    
+    table.insert(DNS_Connections, uis.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == cfg_esp()["ToggleKey"] then
+            ESP_ShowGUI = not ESP_ShowGUI
+            if ESP_ShowGUI then
+                if not ESP_GUI then
+                    ESP_GUI = CreateFilterGUI()
+                end
+                ESP_GUI.Enabled = true
+                ESP_GUIVisible = true
+            else
+                if ESP_GUI then
+                    ESP_GUI.Enabled = false
+                end
+                ESP_GUIVisible = false
+            end
+        end
+    end))
+    
+    for _, player in pairs(plrs:GetPlayers()) do
+        if player ~= lplr then
+            CreatePlayerESP(player)
+        end
+    end
+    
+    table.insert(DNS_Connections, plrs.PlayerAdded:Connect(function(player)
+        CreatePlayerESP(player)
+    end))
+    
+    table.insert(DNS_Connections, plrs.PlayerRemoving:Connect(function(player)
+        if ESP_Players[player] then
+            for _, draw in pairs(ESP_Players[player]) do
+                pcall(function() draw:Remove() end)
+            end
+            ESP_Players[player] = nil
+        end
+    end))
+    
+    local gui_update_timer = 0
+    table.insert(DNS_Connections, rs.RenderStepped:Connect(function()
+        gui_update_timer = gui_update_timer + 1
+        if gui_update_timer >= 300 then 
+            gui_update_timer = 0
+            if ESP_GUI and ESP_GUIVisible and CreateFilterGUI then
+                pcall(function()
+                    local wasVisible = ESP_GUIVisible
+                end)
+            end
+        end
+    end))
+    
+    local esp_throttle = 0
+    table.insert(DNS_Connections, rs.RenderStepped:Connect(function()
+        esp_throttle = (esp_throttle + 1) % 4
+        if esp_throttle ~= 0 then return end
+        
+        for player, drawingInstances in pairs(ESP_Players) do
+            if not player or not player.Character then continue end
+            
+            local shouldDraw = false
+            for _, filteredName in pairs(_G.ESPFilteredPlayers) do
+                if player.Name == filteredName then
+                    shouldDraw = true
+                    break
+                end
+            end
+            
+            if not shouldDraw then
+                for _, draw in pairs(drawingInstances) do
+                    pcall(function() draw.Visible = false end)
+                end
+                continue
+            end
+            
+            local character = player.Character
+            local hrp = character:FindFirstChild("HumanoidRootPart")
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            
+            if not hrp or not humanoid then continue end
+            
+            local screenPos = c:WorldToViewportPoint(hrp.Position)
+            local distFromChar = (c.CFrame.Position - hrp.Position).Magnitude
+            
+            if cfg_esp()["RenderDistance"] and distFromChar > cfg_esp()["RenderDistance"] then
+                for _, draw in pairs(drawingInstances) do
+                    pcall(function() draw.Visible = false end)
+                end
+                continue
+            end
+            
+            if screenPos.Z > 0 then 
+                local charSize = (c:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0)).Y - c:WorldToViewportPoint(hrp.Position + Vector3.new(0, 2.6, 0)).Y) / 2
+                local boxSize = Vector2.new(math.floor(charSize * 1.1), math.floor(charSize * 1.9))
+                local boxPosition = Vector2.new(math.floor(screenPos.X - charSize * 1.1 / 2), math.floor(screenPos.Y - charSize * 1.6 / 2))
+                
+                local espColor = cfg_esp()["Color"]
+                
+                if cfg_esp()["ShowBoxes"] then
+                    drawingInstances.Box.Size = boxSize
+                    drawingInstances.Box.Position = boxPosition
+                    drawingInstances.Box.Visible = true
+                    drawingInstances.Box.Color = espColor
+                    drawingInstances.Box.Transparency = cfg_esp()["Transparency"]
+                    
+                    drawingInstances.BoxOutline.Size = boxSize
+                    drawingInstances.BoxOutline.Position = boxPosition
+                    drawingInstances.BoxOutline.Visible = true
+                    drawingInstances.BoxOutline.Transparency = cfg_esp()["Transparency"]
+                else
+                    drawingInstances.Box.Visible = false
+                    drawingInstances.BoxOutline.Visible = false
+                end
+                
+                if cfg_esp()["ShowNames"] then
+                    drawingInstances.Name.Visible = true
+                    drawingInstances.Name.Text = character.Humanoid.DisplayName
+                    drawingInstances.Name.Position = Vector2.new(boxSize.X / 2 + boxPosition.X, boxPosition.Y - 16)
+                    drawingInstances.Name.Color = espColor
+                    drawingInstances.Name.Transparency = cfg_esp()["Transparency"]
+                else
+                    drawingInstances.Name.Visible = false
+                end
+            else
+                for _, draw in pairs(drawingInstances) do
+                    pcall(function() draw.Visible = false end)
+                end
+            end
+        end
+    end))
+end
+
+if cfg_misc()["TryhardAnimations"]["Enabled"] then
+    local lastCharacter = nil
+    local animCounter = 0
+    
+    table.insert(DNS_Connections, rs.RenderStepped:Connect(function()
+        local character = lplr.Character
+        
+        if character ~= lastCharacter then
+            lastCharacter = character
+            if character and character:FindFirstChild("Animate") then
+                local anim = character.Animate
+                anim.run.RunAnim.AnimationId = cfg_misc()["TryhardAnimations"]["RunAnimation"]
+                anim.jump.JumpAnim.AnimationId = cfg_misc()["TryhardAnimations"]["JumpAnimation"]
+                anim.fall.FallAnim.AnimationId = cfg_misc()["TryhardAnimations"]["FallAnimation"]
+            end
+        end
+    end))
+end
+
+if cfg_misc()["InstantKill"]["Enabled"] then
+    local ik_cooldown = 0
+    local gun_sequence = {"[Double-Barrel SG]", "[TacticalShotgun]", "[Double-Barrel SG]", "[TacticalShotgun]"}
+    local gun_index = 1
+    local last_shot_time = 0
+    local shots_fired = 0
+    local ik_executing = false
+    
+    -- Reset on respawn
+    table.insert(DNS_Connections, lplr.CharacterAdded:Connect(function(char)
+        task.wait(0.1)
+        ik_cooldown = 0
+        ik_executing = false
+        ik_active = false
+        gun_index = 1
+        last_shot_time = 0
+        shots_fired = 0
+        SilentTarget = nil
+        CachedAimPart = nil
+        CachedAimPosition = nil
+    end))
+    
+    table.insert(DNS_Connections, uis.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton3 then
+            if ik_executing or ik_cooldown > 0 then return end
+            
+            -- Force update aim to get fresh target
+            UpdateCachedAim()
+            
+            -- CHECK: Must have a LIVING target in FOV to execute
+            if not SilentTarget or not SilentTarget.Character then return end
+            if not IsAlive(SilentTarget) then return end  -- Dead/K.O check
+            
+            local lhrp = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
+            local thrp = SilentTarget.Character:FindFirstChild("HumanoidRootPart")
+            if not lhrp or not thrp then return end
+            
+            -- Check if target is in FOV
+            local fov_config = getgenv().DNS["Silent"]["FOV"]
+            local fov_radius = fov_config["Radius"]
+            local screen_pos = c:WorldToViewportPoint(thrp.Position)
+            local mouse_pos = uis:GetMouseLocation()
+            local dist_to_mouse = (Vector2.new(screen_pos.X, screen_pos.Y) - mouse_pos).Magnitude
+            
+            if dist_to_mouse > fov_radius then return end  -- Target not in FOV, don't execute
+            
+            -- Target is ALIVE and in FOV, execute combo
+            ik_active = true
+            ik_executing = true
+            gun_index = 1
+            last_shot_time = 0
+            shots_fired = 0
+            
+            local backpack = lplr:FindFirstChild("Backpack")
+            if backpack then
+                local knife = lplr.Character:FindFirstChild("[Knife]")
+                if knife then
+                    pcall(function() knife.Parent = backpack end)
+                end
+            end
+        end
+    end))
+    
+    table.insert(DNS_Connections, rs.Heartbeat:Connect(function()
+        -- Always decrement cooldown first, regardless of ik_active state
+        if ik_cooldown > 0 then
+            ik_cooldown = ik_cooldown - 1
+        end
+        
+        if last_shot_time > 0 then
+            last_shot_time = last_shot_time + 1
+            if last_shot_time > 15 and cfg_misc()["InstantKill"]["PutAwayAfterShot"] then
+                local backpack = lplr:FindFirstChild("Backpack")
+                if backpack and lplr.Character then
+                    local db = lplr.Character:FindFirstChild("[Double-Barrel SG]")
+                    local tac = lplr.Character:FindFirstChild("[TacticalShotgun]")
+                    local knife = lplr.Character:FindFirstChild("[Knife]")
+                    if db then pcall(function() db.Parent = backpack end) end
+                    if tac then pcall(function() tac.Parent = backpack end) end
+                    if knife then pcall(function() knife.Parent = backpack end) end
+                end
+                last_shot_time = 0
+                ik_active = false
+                ik_executing = false
+            end
+        end
+        
+        if not ik_active then return end
+        if not lplr or not lplr.Character then return end
+        
+        if shots_fired >= 2 then
+            ik_active = false
+            ik_executing = false
+            ik_cooldown = 10
+            return
+        end
+        
+        local closest_player = nil
+        local closest_dist = math.huge
+        local mousePos = uis:GetMouseLocation()
+        
+        for _, player in pairs(game:GetService("Players"):GetPlayers()) do
+            if player == lplr then continue end
+            if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then continue end
+            if not IsAlive(player) then continue end  -- Skip dead/K.O players
+            
+            local screenPos = c:WorldToViewportPoint(player.Character.HumanoidRootPart.Position)
+            if screenPos.Z <= 0 then continue end
+            
+            local cursor_dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+            if cursor_dist < closest_dist then
+                closest_dist = cursor_dist
+                closest_player = player
+            end
+        end
+        
+        if not closest_player then return end
+        
+        local gun_name = gun_sequence[gun_index]
+        local backpack = lplr:FindFirstChild("Backpack")
+        if not backpack then return end
+        
+        local gun_in_char = lplr.Character:FindFirstChild(gun_name)
+        if gun_in_char then
+            pcall(function() gun_in_char.Parent = backpack end)
+        end
+        
+        local gun = backpack:FindFirstChild(gun_name)
+        if gun then
+            pcall(function() gun.Parent = lplr.Character end)
+            pcall(function() gun:Activate() end)
+            last_shot_time = 1
+            shots_fired = shots_fired + 1
+            ik_cooldown = 5
+            gun_index = gun_index + 1
+            if gun_index > #gun_sequence then gun_index = 1 end
+        end
+    end))
+end
+
+-- Extended Hitbox - FOV Based Targeting (Non-Revolver Only)
+if getgenv().DNS["ExtendedHitbox"]["Enabled"] then
+    local visualBox = nil
+    local trackedHitboxes = {}  -- Track hitboxes for each player
+    
+    table.insert(DNS_Connections, rs.RenderStepped:Connect(function()
+        if not getgenv().DNS["ExtendedHitbox"]["Enabled"] then return end
+        if IsRevolverEquipped() then return end
+        
+        -- Create visual box on first run
+        if not visualBox or not visualBox.Parent then
+            visualBox = Instance.new("Part")
+            visualBox.Name = "TargetingBox"
+            visualBox.Shape = Enum.PartType.Block
+            visualBox.Size = getgenv().DNS["ExtendedHitbox"]["VisualBoxSize"]
+            visualBox.Color = Color3.fromRGB(128, 128, 128)  -- Grey
+            visualBox.Material = Enum.Material.Neon
+            visualBox.CanCollide = false
+            visualBox.CanQuery = false
+            visualBox.Transparency = 0.7
+            visualBox.Parent = workspace
+        end
+        
+        -- Find closest player to CURSOR in FOV (GetClosestPlayerInFOV already filters dead/K.O via IsAlive)
+        local closestPlayer = GetClosestPlayerInFOV()
+        
+        -- Must be within 78 studs
+        if closestPlayer and closestPlayer.Character then
+            local playerHRP = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
+            local targetHRP = closestPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if playerHRP and targetHRP then
+                local distToPlayer = (targetHRP.Position - playerHRP.Position).Magnitude
+                if distToPlayer > getgenv().DNS["ExtendedHitbox"]["Range"] then
+                    closestPlayer = nil
+                end
+            end
+        end
+        
+        -- Apply hitbox only to closest player
+        if closestPlayer and closestPlayer.Character then
+            closestPlayerRef = closestPlayer  -- Update beam extension reference
+            local targetHRP = closestPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if targetHRP then
+                -- Check distance to closest player
+                local playerHRP = lplr.Character and lplr.Character:FindFirstChild("HumanoidRootPart")
+                local distToClosest = playerHRP and (targetHRP.Position - playerHRP.Position).Magnitude or math.huge
+                
+                -- Check if too close (only if CloseDisableEnabled is true)
+                local isTooClose = false
+                if getgenv().DNS["ExtendedHitbox"]["CloseDisableEnabled"] then
+                    isTooClose = distToClosest <= getgenv().DNS["ExtendedHitbox"]["CloseDisableRange"]
+                end
+                
+                -- Only expand if not too close
+                if not isTooClose then
+                    -- Use silent aim's wall check
+                    if DoWallCheck(closestPlayer) then
+                        -- Not behind wall - expand hitbox
+                        targetHRP.Size = getgenv().DNS["ExtendedHitbox"]["HitboxSize"]
+                        targetHRP.CanCollide = false
+                        targetHRP.TopSurface = Enum.SurfaceType.Smooth
+                        targetHRP.BottomSurface = Enum.SurfaceType.Smooth
+                        
+                        -- Add to noclip collision group so bullets pass through
+                        pcall(function()
+                            PhysicsService:AddCollisionGroup("Noclip", targetHRP)
+                        end)
+                        
+                        if getgenv().DNS["ExtendedHitbox"]["ShowHitbox"] then
+                            targetHRP.Transparency = 0.7
+                            targetHRP.Color = Color3.fromRGB(128, 128, 128)
+                            targetHRP.Material = Enum.Material.Neon
+                        else
+                            targetHRP.Transparency = 1
+                        end
+                        
+                        trackedHitboxes[closestPlayer] = true
+                    else
+                        -- Behind wall - disable
+                        if trackedHitboxes[closestPlayer] then
+                            targetHRP.Size = Vector3.new(2, 2, 2)
+                            targetHRP.Transparency = 1
+                            targetHRP.CanCollide = true
+                            pcall(function() PhysicsService:RemoveCollisionGroup("Noclip", targetHRP) end)
+                            trackedHitboxes[closestPlayer] = nil
+                        end
+                    end
+                else
+                    -- Too close (if CloseDisableEnabled) - disable
+                    if trackedHitboxes[closestPlayer] then
+                        targetHRP.Size = Vector3.new(2, 2, 2)
+                        targetHRP.Transparency = 1
+                        targetHRP.CanCollide = true
+                        pcall(function() PhysicsService:RemoveCollisionGroup("Noclip", targetHRP) end)
+                        trackedHitboxes[closestPlayer] = nil
+                    end
+                end
+            end
+            
+            -- Disable hitboxes for all other players (except dead/K.O)
+            for _, player in pairs(game:GetService("Players"):GetPlayers()) do
+                if player ~= lplr and player.Character and player ~= closestPlayer then
+                    -- Skip dead/K.O players completely
+                    if not IsAlive(player) then continue end
+                    
+                    local targetHRP = player.Character:FindFirstChild("HumanoidRootPart")
+                    if targetHRP and trackedHitboxes[player] then
+                        targetHRP.Size = Vector3.new(2, 2, 2)  -- Reset to normal
+                        -- Don't touch collision groups - leave them in Default so bullets hit them
+                        trackedHitboxes[player] = nil
+                    end
+                end
+            end
+        else
+            -- No target - reset ALL tracked hitboxes to normal collision
+            closestPlayerRef = nil  -- Clear beam extension reference
+            for player, wasTracked in pairs(trackedHitboxes) do
+                if wasTracked and player.Character and IsAlive(player) then
+                    local targetHRP = player.Character:FindFirstChild("HumanoidRootPart")
+                    if targetHRP then
+                        -- Reset size only - leave collision groups alone
+                        targetHRP.Size = Vector3.new(2, 2, 2)
+                        targetHRP.Transparency = 1
+                        -- Remove from Noclip so they collide normally again
+                        pcall(function() PhysicsService:RemoveCollisionGroup("Noclip", targetHRP) end)
+                    end
+                end
+            end
+            trackedHitboxes = {}
+            if visualBox then visualBox.Transparency = 1 end
+        end
+    end))
+end
+
+table.insert(DNS_Connections, uis.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.Delete then
+        DNS_Cleanup()
+    end
+end))
+
+print("DNS Script loaded - Cursor targeting, extended hitbox, wall check, FixVisuals option enabled")
