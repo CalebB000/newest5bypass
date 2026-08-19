@@ -1,7 +1,3 @@
---// issues (pretty sure 1 is that its meant to be closest to cursor whos in fov not closest to my character 2. the hitbox needs to completly ignore dead K.O people they get in the way when trying to kill someoe when they are around 3. the passthrough needs to be fixed so passthrough happens so the hitbox does not look like its stopping my bullets on my client screen hitbox expansion is too small for distance/ also ban hitbox expansion unless at the 78 distance and optimize for preformace
-
-
-
 if getgenv().DNSload then
     if getgenv().DNS_Cleanup then getgenv().DNS_Cleanup() end
 end
